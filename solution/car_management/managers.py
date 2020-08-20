@@ -21,12 +21,12 @@ class TyreManager(models.Manager):
     def replaceable(self):
         tyre_model = apps.get_model(app_label='car_management', model_name='Tyre')
         return self.in_use().filter(
-           degradation__gt=tyre_model.DEGRADATION_LIMIT
+           degradation__gt=tyre_model.DEGRADATION_THRESHOLD
         )
     
     def discarded(self):
         tyre_model = apps.get_model(app_label='car_management', model_name='Tyre')
         return self.filter(
             currently_in_use=False,
-            degradation__gt=tyre_model.DEGRADATION_LIMIT
+            degradation__gt=tyre_model.DEGRADATION_THRESHOLD
         )
