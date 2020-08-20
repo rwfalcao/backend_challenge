@@ -33,6 +33,11 @@ class Tyre (models.Model):
         'car_management.Car', 
         on_delete=models.CASCADE
         )
+    
+    def __str__(self):
+        if self.car:
+            return "Car %s's tyre" % self.car.id
+        return "Available tyre"
 
 
 class Trip (models.Model):
@@ -52,6 +57,10 @@ class Trip (models.Model):
     )
 
 
+    def __str__(self):
+        return '%s km trip by car %s' % (self.distance, self.car.id)
+
+
 class Event (models.Model):
     '''
         TODO: comment
@@ -67,6 +76,8 @@ class Event (models.Model):
         max_digits=9, 
         decimal_places=2
     )
+
+
     
 
 class EventType (models.Model):
@@ -84,3 +95,6 @@ class EventType (models.Model):
         max_length=100,
         null=False
         )
+
+    def __str__(self):
+        return self.description
