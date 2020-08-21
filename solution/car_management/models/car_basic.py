@@ -1,7 +1,7 @@
 from django.db import models
-import numbers
 
 from car_management.managers import TyreManager
+from car_management.utils import *
 
 
 class Car (models.Model):
@@ -11,7 +11,7 @@ class Car (models.Model):
     KMS_PER_LITER = 8
 
     current_gas_level = models.DecimalField(
-        'Gas level in %',
+        'Liters in gas tank',
         default=0,
         max_digits=3, 
         decimal_places=2
@@ -21,26 +21,44 @@ class Car (models.Model):
         'Gas capacity in Liters',
     )
 
-    @classmethod
-    def is_missing_tyre():
+    def travel(self, distance):
         '''
-            Returns whether or not the car is missing at least one tyre.
+            Reflects all possible changes to car value due to a travel.
+
+            :param float distance: Distance travelled in KM .
+        '''
+        
+        self.degrade_tyres(distance)
+        self.consume_fuel(distance)
+
+    def degrade_tyres(self, distance):
+        '''
+            Decrease current gas level relative to the distance travelled.
+
+            :param float distance: Distance travelled in KM .
         '''
 
-        amout_tyres_in_use = self.tyre_set.amount_in_use()
-        if amout_tyres_in_use <= self.MAX_NUMBER_OF_TYRES:
-            return True
+        for tyre in self.tyre_set.in_use():
+            tyre.degrade(distance)
 
-        return False
+    def consume_fuel(self, distance):
+        '''
+            Decrease current gas level relative to the distance travelled.
+
+            :param float distance: Amount of liters of fuel to be added to the car.
+        '''
+
+        self.current_gas_level -= distance/* Car.KMS_PER_LITER
+        self.save()
 
     def refuel(self, amount):
         '''
-            Increases car's object gas capacity by the amount received in liters.
+            Increases car's object gas level by the amount received in liters.
 
             :param float amount: Amount of liters of fuel to be added to the car.
         '''
 
-        amount_is_number = isinstance(amount, numbers.Number)
+        amount_is_number = is_number(amount)
         if amount_is_number:
             wont_overflow = amount + self.current_gas_level <= gas_capacity
 
@@ -55,38 +73,48 @@ class Car (models.Model):
         '''
             Returns refuel amount in liters so the tank is full.
         '''
+
         capacity = self.gas_capacity
         current_gas_level = self.current_gas_level
 
         return capacity - current_gas_level
+    
+    def replenish_gas_tank(self):
+        '''
+            Adds the amount of fuel the car needs for the tank to be full.
+        '''
 
+        amount_gas_needed = self.get_refuel_amount()
 
-    def maintenance(self, part):
+        return self.refuel(amount_gas_needed)
+
+    def maintenance(self, event_id):
         '''
             Method responsible for calling subroutines for car maintenance.
 
-            :param str part: Text representing one of the possible parts to be replace found in Car.REPLACEABLE_PARTS.
+            :param int event_id: Id of one of the possible events that require some type of maintenance during a trip.
         '''
 
-        if isinstance(part, str):
-            part = part.lower()
+        if event_type_id == EventType.TYRE_CHANGE_ID:
+            self.replace_degraded_tyres()
+            return True
+        elif event_type_id == EventType.REFUEL_ID:
+            self.replenish_gas_tank()
+            return True
 
-            if part == 'tyre':
-                self.replace_degraded_tyres()
-            elif part == 'gas':
-                self.refuel()
+        return False
 
     def add_new_tyre(self):
         '''
             Method responsible adding a new tyre to the car.
         '''
+
         if self.is_missing_tyre:
             return Tyre.objects.create(
                 car=self,
                 currently_in_use=True
             )
         return None
-
 
     def replace_degraded_tyres(self):
         '''
@@ -102,13 +130,14 @@ class Car (models.Model):
         '''
             Returns max trip distance with current gas level in KM.
         '''
+
         return self.current_gas_level * self.KMS_PER_LITER
 
     def get_km_before_tyre_change(self):
         '''
             Return how many kimoleters the most used tyre has left for use.
         '''
-        most_used_tyre = Tyres.objects.in_use().order_by(
+        most_used_tyre = self.tyre_set.in_use().order_by(
             '-degradation'
         ).first()
 
@@ -134,6 +163,18 @@ class Car (models.Model):
             TODO: Every info about the car
         '''
         pass
+
+    @classmethod
+    def is_missing_tyre():
+        '''
+            Returns whether or not the car is missing at least one tyre.
+        '''
+
+        amout_tyres_in_use = self.tyre_set.amount_in_use()
+        if amout_tyres_in_use <= self.MAX_NUMBER_OF_TYRES:
+            return True
+
+        return False
 
 class Tyre (models.Model):
 
@@ -168,15 +209,29 @@ class Tyre (models.Model):
         ''' 
             Method responsible for returning the % left on the tyre's lifespan.
         '''
+
         percentage_left = Tyre.DEGRADATION_LIMIT - most_used_tyre.degradation
         return percentage_left if percentage_left >= 0 else 0
 
     def replace(self):
+        ''' 
+            Method responsible for replacing the object's tyre.
+        '''
         self.currently_in_use = False
         self.save()
 
         car = self.car
         car.add_new_tyre()
+    
+    def degrade(self, distance):
+        ''' 
+            Method responsible for updating tyre's degrade percentage based on a distance.
+
+            :param float distance: Distance travelled in KM .
+        '''
+
+        self.degradation += distance * Tyre.DEGRADATION_RATE
+        self.save()
 
 
 class Trip (models.Model):
@@ -187,9 +242,16 @@ class Trip (models.Model):
         )
         
     distance = models.DecimalField(
-        'Distance traveled in KM',
+        'Total distance to be traveled in KM',
         max_digits=9, 
         decimal_places=2
+    )
+
+    travelled_distance = models.DecimalField(
+        'Distance traveled in KM',
+        max_digits=9, 
+        decimal_places=2,
+        default=0
     )
 
     def __str__(self):
@@ -199,6 +261,7 @@ class Trip (models.Model):
         '''
             Creates new event that happened during the trip.
         '''
+
         try:
             event_type = EventType.objects.get(id=event_type_id)
         except:
@@ -216,22 +279,48 @@ class Trip (models.Model):
 
     def start(self):
         '''
-            Routine that returns the results of the trip
+            Routine that simulates what happened during the trip.
         '''
-        current_distance_from_destination = self.distance
-        travelled_distance = 0
-        while current_distance_from_destination >= 0:
+
+        while not self.has_arrived_at_destination():
             next_stop_in, tyre_change_in, refuel_in = self.car.get_next_maintenance_stop()
 
-            current_distance_from_destination -= next_stop_in
-            travelled_distance += self.distance - current_distance
+            if self.stop_needed_before_destination(next_stop_in):
+                self.travelled_distance += next_stop_in
 
-            event = self.new_event(
-                km=travelled_distance,
-                event_type_id=EventType.TYRE_CHANGE_ID if tyre_change_in < refuel_in else EventType.REFUEL_ID
-            )
+                self.car.travel(next_stop_in)
 
-            # TODO: TYRE CHANGE OR REFUEL ACTION
+                event_type_id = EventType.TYRE_CHANGE_ID if tyre_change_in < refuel_in else EventType.REFUEL_ID
+
+                self.car.maintenance(event_type_id)
+
+                event = self.new_event(
+                    km=self.travelled_distance,
+                    event_type_id=event_type_id
+                )
+    
+    def has_arrived_at_destination(self):
+        '''
+            Returns whether or not the car has reached it's final destination on this Trip.
+        '''
+
+        return True if self.travelled_distance >= self.distance else False
+
+    def stop_needed_before_destination(self, next_stop_distance=None):
+        '''
+            Returns whether or not the car will need maintenance before the end of the Trip. 
+            Calling the method without a distance as an argument will return if the car will
+            need to stop at all until the end of the trip.
+
+            :param float next_stop_distance: Distance in KM needed for the next maintenance stop.
+        '''
+
+        if not next_stop_distance:
+            next_stop_distance = self.distance
+        
+        distance_to_stop = next_stop_distance + self.travelled_distance
+
+        return True if distance_to_stop < self.distance else False
 
 
 class Event (models.Model):
@@ -251,6 +340,9 @@ class Event (models.Model):
         max_digits=9, 
         decimal_places=2
     )
+
+    def __str__(self):
+        return '%s on Trip (%s)' % (self.event_type.description, self.trip.id)
 
 
 class EventType (models.Model):
