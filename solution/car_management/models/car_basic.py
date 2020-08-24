@@ -48,7 +48,7 @@ class Car (models.Model):
             :param float distance: Amount of liters of fuel to be added to the car.
         '''
 
-        self.current_gas_level -= distance/* Car.KMS_PER_LITER
+        self.current_gas_level -= distance / Car.KMS_PER_LITER
         self.save()
 
     def refuel(self, amount):
